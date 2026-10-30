@@ -1,3 +1,5 @@
+> **Fork de [jqssun/android-airplay-server](https://github.com/jqssun/android-airplay-server)**, pour un Chromecast. Seul changement commité : compilation limitée aux architectures ARM. Le reste de ce README vient du projet d'origine.
+
 # AirPlay Receiver for Android
 
 [![Stars](https://img.shields.io/github/stars/jqssun/android-airplay-server)](https://github.com/jqssun/android-airplay-server)
