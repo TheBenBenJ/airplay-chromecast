@@ -11,7 +11,7 @@ val localProps = Properties().apply {
     rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use(::load)
 }
 
-val allAbis = listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+val allAbis = listOf("arm64-v8a", "armeabi-v7a")
 
 android {
     namespace = "io.github.jqssun.airplay"
