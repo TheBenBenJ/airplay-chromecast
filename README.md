@@ -1,4 +1,127 @@
-> **Fork de [jqssun/android-airplay-server](https://github.com/jqssun/android-airplay-server)**, pour un Chromecast. Seul changement commité : compilation limitée aux architectures ARM. Le reste de ce README vient du projet d'origine.
+# airplay-chromecast
+
+> **Fork of [jqssun/android-airplay-server](https://github.com/jqssun/android-airplay-server), under the [GPL-3.0](LICENSE).**
+> The receiver, its Android app and its patches to [UxPlay](https://github.com/FDH2/UxPlay) are the work of jqssun and the upstream contributors.
+> This fork only changes how the app is built for one device. The fork notes come first; the [upstream README](#airplay-receiver-for-android) follows, unchanged.
+
+## What it is and why
+
+An AirPlay receiver for a Chromecast with Google TV, so an iPhone or a Mac can mirror its screen, or play video and music, on a TV that has no AirPlay of its own (older LG webOS sets, for example).
+The other options were buying an Apple TV, or a closed-source receiver app; see [Design decisions](#design-decisions).
+
+## What differs from upstream
+
+| Change | Where | Why |
+|---|---|---|
+| Native code built for `arm64-v8a` and `armeabi-v7a` only, no `x86_64` | `allAbis` in `app/build.gradle.kts` | The Chromecast with Google TV runs a 32-bit ARM userspace; `x86_64` only serves emulators and lengthens every build. |
+| UxPlay submodule on [TheBenBenJ/UxPlay](https://github.com/TheBenBenJ/UxPlay), branch `airplay-chromecast` | `.gitmodules` | That branch is upstream UxPlay `df67c21` with this repo's patches `0001` to `0009` already committed, so the submodule carries the adaptations itself. It currently breaks the build: see [Known issue](#known-issue-applyuxplaypatches-fails). |
+
+Everything else is upstream's: code, resources, app name and application ID (`io.github.jqssun.airplay`).
+
+## How it works
+
+```text
+iPhone / Mac  -- finds the receiver over mDNS (same subnet) -->
+     |  AirPlay: mirroring stream, audio stream, or an HLS URL for video
+     v
+Chromecast with Google TV, app running as a foreground service
+     UxPlay (C, through JNI): AirPlay/RAOP protocol, pairing, FairPlay
+     MediaCodec: H.264/H.265 video, AAC/ALAC audio (software fallbacks)
+     ExoPlayer: HLS video through a local playlist proxy
+     |  HDMI
+     v
+    TV
+```
+
+With the upstream defaults (`auto_start`, `boot_auto_start`), the receiver starts with the app and again after each reboot of the Chromecast, so nobody has to open the app first.
+
+## Requirements
+
+- JDK 21 (the upstream CI uses Zulu 21; on macOS, `brew install openjdk@21`).
+- Android SDK with platform 37, NDK `27.0.12077973` and CMake 3.22.1 (versions pinned in `app/build.gradle.kts` and `app/src/main/cpp/CMakeLists.txt`), and a `local.properties` with `sdk.dir=...`.
+- `git` on the `PATH`: the build applies patches inside the UxPlay submodule.
+- A device running Android 7.0 or later, on the same subnet as the senders, with developer options and wireless debugging turned on for the install.
+
+## Build
+
+```sh
+git clone --recurse-submodules https://github.com/TheBenBenJ/airplay-chromecast
+cd airplay-chromecast
+export JAVA_HOME="$(brew --prefix openjdk@21)"   # macOS
+./gradlew assembleDebug                           # first build compiles FFmpeg and OpenSSL: a few minutes
+# APK: app/build/outputs/apk/debug/app-debug.apk
+```
+
+`.github/workflows/apk.yml` is upstream's release workflow. It runs on `release/**` branches, `v*` tags or by hand, and needs two secrets this repo does not define: `STORE` (the signing keystore) and `LOCAL` (a `local.properties` with the signing settings). Builds for this fork are local debug builds.
+
+### Known issue: `applyUxplayPatches` fails
+
+Before CMake runs, the `applyUxplayPatches` Gradle task resets the UxPlay files that the patches touch, then applies `app/src/main/cpp/patches/UxPlay/*.patch`. The pinned fork commit `d01cfb4` already contains those patches, so `git apply` stops with `patch does not apply` and the build fails.
+
+Until that is settled, build from the upstream base commit, which the fork also contains. Upstream `df67c21` plus the patches is byte for byte the same source as `d01cfb4`:
+
+```sh
+S=app/src/main/cpp/third_party/UxPlay
+git -C "$S" fetch --depth 2 origin airplay-chromecast   # the submodule is cloned shallow: fetch the parent commit
+git -C "$S" checkout df67c21
+./gradlew assembleDebug
+git submodule update --force "$S"                        # back to the pinned commit, patches discarded
+```
+
+The lasting fix is one of: pin the submodule back on upstream UxPlay `df67c21` (and drop the fork), or make the task skip patches that are already applied.
+
+## Install
+
+On the device: Settings > System > Developer options > Wireless debugging > Pair device with pairing code. Then, on the computer:
+
+```sh
+adb pair <device-ip>:<pairing-port>     # once, with the code shown on the TV
+adb mdns services                       # the connection port changes each time wireless debugging is turned on
+adb connect <device-ip>:<port>
+adb -s <device-ip>:<port> install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+Name the receiver as it should appear in the AirPlay list (upstream settings receiver, see [Configure from ADB](#configure-from-adb)):
+
+```sh
+adb -s <device-ip>:<port> shell am broadcast -n io.github.jqssun.airplay/.SettingsReceiver \
+  -a io.github.jqssun.airplay.SET_SETTING --es key server_name --es value "<receiver name>"
+```
+
+## Operations and troubleshooting
+
+- **Receiver not listed on the iPhone or Mac.** Sender and Chromecast must be on the same subnet, without client isolation (guest Wi-Fi often blocks mDNS). Open the app once if the service did not start, and check that `boot_auto_start` is `true` with the `LIST_SETTINGS` broadcast.
+- **`adb connect` refused.** The port changed: run `adb mdns services` again. With several devices connected, pass `-s <device-ip>:<port>` to every command.
+- **`INSTALL_FAILED_UPDATE_INCOMPATIBLE`.** The installed app was signed with another key, for example the upstream Google Play or F-Droid build, which uses the same application ID. Uninstall it first (its settings are lost) or build on the machine that signed it.
+- **Logs.** In the app (Logs screen), or `adb -s <device> logcat --pid=$(adb -s <device> shell pidof io.github.jqssun.airplay)`.
+- **Some video apps do not play.** DRM-protected content (Apple TV app and similar) is not supported upstream.
+- **Changing a setting drops the session.** Settings marked `restart = true` in `Prefs.kt` (name, port, codecs, PIN...) make the service restart the AirPlay server a moment after the change.
+
+The TV remote control and the HDMI-CEC wake-up of the TV are handled outside this repo (see [homebridge-chromecast](https://github.com/TheBenBenJ/homebridge-chromecast)).
+
+## Security notes
+
+- Anyone on the local network can find the receiver and cast to it, and with the default `allow_new_conn` a new sender drops the current one. Turn on `require_pin` if the network is shared.
+- The settings receiver is protected by `android.permission.DUMP`: only `adb shell` and the system can change settings, not other installed apps.
+- Wireless debugging gives full control of the device to every paired computer. Pair only your own machines, and turn it off when it is not needed.
+- A debug build is debuggable (`run-as` works over adb). That is acceptable on a home TV device; for anything else, build a release with your own signing key.
+- Never commit `local.properties` or a keystore: both are in `.gitignore`.
+
+## Design decisions
+
+- **A receiver app on the Chromecast, not an Apple TV.** The Chromecast was already plugged into the TV; buying an Apple TV for AirPlay alone was not worth it.
+- **This upstream, not a closed-source receiver.** Commercial apps such as AirScreen do the same job, but they are network-facing services whose code cannot be read or rebuilt. jqssun/android-airplay-server is GPL-3, supports AirPlay 2 mirroring, audio and HLS video, supports Android TV remote navigation, and is actively maintained.
+- **Built from source, not installed from Google Play or F-Droid.** The code that runs on the device is the code in this repo, and it can be customised later (app name, headless start, latency) without waiting for upstream. Until then nothing is customised: see the next point.
+- **Minimal divergence from upstream.** No code change, and the application ID and app name are kept, so merging `upstream/main` can only conflict on the `allAbis` line. Renaming the app would touch many files and make every merge conflict. Cost: this build cannot be installed next to the upstream one.
+- **ARM only.** The target device runs a 32-bit ARM userspace (`armeabi-v7a`). `arm64-v8a` stays so the same APK also runs on 64-bit ARM devices. `x86_64` is dropped: it only serves emulators, and each ABI rebuilds FFmpeg and OpenSSL from source.
+- **UxPlay submodule on a fork.** Introduced so that the submodule itself carries the adaptations, in a repository under this project's control. It conflicts with the build's own patch step (see [Known issue](#known-issue-applyuxplaypatches-fails)); which side to keep is still open.
+- **Upstream release workflow left as is.** Release signing and store publishing do not apply to a single home device, and editing the workflow would only add merge conflicts.
+
+## License
+
+GPL-3.0, see [LICENSE](LICENSE), unchanged from upstream. This fork's changes are under the same license. Credits for the receiver go to jqssun and the upstream contributors; third-party components are listed in the upstream README below.
+
+---
 
 # AirPlay Receiver for Android
 
