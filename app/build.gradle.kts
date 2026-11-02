@@ -11,6 +11,8 @@ val localProps = Properties().apply {
     rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use(::load)
 }
 
+// Fork change: ARM only. The target device (Chromecast with Google TV) runs a 32-bit ARM
+// userspace; upstream also builds x86_64, which only serves emulators.
 val allAbis = listOf("arm64-v8a", "armeabi-v7a")
 
 android {
