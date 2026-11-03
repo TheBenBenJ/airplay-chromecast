@@ -1,0 +1,50 @@
+# Light CI: syntax checks only. No secret, no deployment, no signing key. No Gradle
+# build: the app needs the Android NDK and builds FFmpeg from the submodules, far beyond
+# a quick check (release builds stay in apk.yml). Kotlin and C/C++ are not checked.
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md']
+  pull_request:
+    branches: [main]
+    paths-ignore: ['**.md']
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Shell (bash -n, shellcheck -S error)
+        # The Gradle wrapper and the *.sh scripts (wrap.sh runs under Android's /system/bin/sh).
+        run: |
+          status=0; files=()
+          while IFS= read -r -d '' f; do files+=("$f"); done < <(git ls-files -z -- 'gradlew' '*.sh')
+          for f in "${files[@]}"; do bash -n "$f" || status=1; done
+          if [ ${#files[@]} -gt 0 ]; then shellcheck -S error "${files[@]}" || status=1; fi
+          exit $status
+
+      - name: XML and TOML (well-formed)
+        # Android manifest and resources, and the Gradle version catalog; the runner's python3.
+        run: |
+          git ls-files -z -- '*.xml' '*.toml' | xargs -0 -r python3 -c '
+          import sys, tomllib, xml.etree.ElementTree as ET
+          bad = 0
+          for f in sys.argv[1:]:
+              try:
+                  if f.endswith(".toml"):
+                      tomllib.load(open(f, "rb"))
+                  else:
+                      ET.parse(f)
+              except Exception as e:
+                  print(f"{f}: {e}"); bad = 1
+          print(f"{len(sys.argv) - 1} files read")
+          sys.exit(bad)'
