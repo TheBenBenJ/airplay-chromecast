@@ -14,7 +14,6 @@ The other options were buying an Apple TV, or a closed-source receiver app; see 
 | Change | Where | Why |
 |---|---|---|
 | Native code built for `arm64-v8a` and `armeabi-v7a` only, no `x86_64` | `allAbis` in `app/build.gradle.kts` | The Chromecast with Google TV runs a 32-bit ARM userspace; `x86_64` only serves emulators and lengthens every build. |
-| UxPlay submodule on [TheBenBenJ/UxPlay](https://github.com/TheBenBenJ/UxPlay), branch `airplay-chromecast` | `.gitmodules` | That branch is upstream UxPlay `df67c21` with this repo's patches `0001` to `0009` already committed, so the submodule carries the adaptations itself. It currently breaks the build: see [Known issue](#known-issue-applyuxplaypatches-fails). |
 
 Everything else is upstream's: code, resources, app name and application ID (`io.github.jqssun.airplay`).
 
@@ -54,21 +53,11 @@ export JAVA_HOME="$(brew --prefix openjdk@21)"   # macOS
 
 `.github/workflows/apk.yml` is upstream's release workflow. It runs on `release/**` branches, `v*` tags or by hand, and needs two secrets this repo does not define: `STORE` (the signing keystore) and `LOCAL` (a `local.properties` with the signing settings). Builds for this fork are local debug builds.
 
-### Known issue: `applyUxplayPatches` fails
+### UxPlay and its patches
 
-Before CMake runs, the `applyUxplayPatches` Gradle task resets the UxPlay files that the patches touch, then applies `app/src/main/cpp/patches/UxPlay/*.patch`. The pinned fork commit `d01cfb4` already contains those patches, so `git apply` stops with `patch does not apply` and the build fails.
+UxPlay is the official repository (`FDH2/UxPlay`) at upstream's pinned commit `df67c21`, and this repo's changes to it live only in `app/src/main/cpp/patches/UxPlay/*.patch`: before CMake runs, the `applyUxplayPatches` Gradle task resets the UxPlay files that the patches touch, then applies them. The same as upstream does.
 
-Until that is settled, build from the upstream base commit, which the fork also contains. Upstream `df67c21` plus the patches is byte for byte the same source as `d01cfb4`:
-
-```sh
-S=app/src/main/cpp/third_party/UxPlay
-git -C "$S" fetch --depth 2 origin airplay-chromecast   # the submodule is cloned shallow: fetch the parent commit
-git -C "$S" checkout df67c21
-./gradlew assembleDebug
-git submodule update --force "$S"                        # back to the pinned commit, patches discarded
-```
-
-The lasting fix is one of: pin the submodule back on upstream UxPlay `df67c21` (and drop the fork), or make the task skip patches that are already applied.
+From 30/10 to 03/11/2026 the submodule pointed to a fork whose single commit (`d01cfb4`) held the same nine patches, already applied, so the task failed with `patch does not apply`. The fork was checked byte for byte equal to `df67c21` plus the patches, then dropped: one source for the changes, upstream's layout kept.
 
 ## Install
 
@@ -114,7 +103,7 @@ The TV remote control and the HDMI-CEC wake-up of the TV are handled outside thi
 - **Built from source, not installed from Google Play or F-Droid.** The code that runs on the device is the code in this repo, and it can be customised later (app name, headless start, latency) without waiting for upstream. Until then nothing is customised: see the next point.
 - **Minimal divergence from upstream.** No code change, and the application ID and app name are kept, so merging `upstream/main` can only conflict on the `allAbis` line. Renaming the app would touch many files and make every merge conflict. Cost: this build cannot be installed next to the upstream one.
 - **ARM only.** The target device runs a 32-bit ARM userspace (`armeabi-v7a`). `arm64-v8a` stays so the same APK also runs on 64-bit ARM devices. `x86_64` is dropped: it only serves emulators, and each ABI rebuilds FFmpeg and OpenSSL from source.
-- **UxPlay submodule on a fork.** Introduced so that the submodule itself carries the adaptations, in a repository under this project's control. It conflicts with the build's own patch step (see [Known issue](#known-issue-applyuxplaypatches-fails)); which side to keep is still open.
+- **UxPlay changes as patches on the official repository, not as a fork.** Upstream works this way, the changes stay readable in this repository, and moving to a newer UxPlay is a submodule bump plus a patch refresh. A fork carrying the same patches was tried (30/10/2026) and dropped: it duplicated the patches and broke the patch step.
 - **Upstream release workflow left as is.** Release signing and store publishing do not apply to a single home device, and editing the workflow would only add merge conflicts.
 
 ## License
